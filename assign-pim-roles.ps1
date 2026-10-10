@@ -44,13 +44,13 @@ if (!(Test-Path -Path $inputCsvFileName)) {
     New-Item -Force -ItemType File $inputCsvFileName | Out-Null
     Write-Output "# This CSV file provides the input data for the PIM role assignment script." > $inputCsvFileName
     Write-Output "# Fill in the data as per the examples provided below." >> $inputCsvFileName
-    Write-Output "# Example 1: user-based active assignment" >> $inputCsvFileName
-    Write-Output "# Example 2: group-based eligible time-bound assignment" >> $inputCsvFileName
-    Write-Output "# Example 3: service-principal-based active assignment" >> $inputCsvFileName
+    Write-Output "# Example 1: user-based active time-bound assignment" >> $inputCsvFileName
+    Write-Output "# Example 2: group-based eligible time-bound assignment valid for 30 days" >> $inputCsvFileName
+    Write-Output "# Example 3: service-principal-based active permanent assignment" >> $inputCsvFileName
     Write-Output "principal,principalType,scope,role,assignmentType,ticketNumber,duration" >> $inputCsvFileName
     Write-Output "user1,user,lab-network-identity,reader,active,TKT001" >> $inputCsvFileName
     Write-Output "test-group,group,lab-network,network contributor,eligible,TKT002,30" >> $inputCsvFileName
-    Write-Output "test-sp,servicePrincipal,rg-lab-network,contributor,active,TKT002" >> $inputCsvFileName
+    Write-Output "test-sp,servicePrincipal,rg-lab-network,contributor,active,TKT002,permanent" >> $inputCsvFileName
 
     Write-Output "Exiting. Please review the CSV input file '$inputCsvFileName' for details."
     exit 0
