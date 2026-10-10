@@ -1,3 +1,25 @@
+<#
+.SYNOPSIS
+    A PowerShell script to create and update Azure RBAC assignments using PIM.
+
+.DESCRIPTION
+    This script takes input data from the input-pim-rbac.csv file and creates
+    an Azure RBAC PIM assignment for each row of input data. If the input file
+    is missing, it is created with examples. The examples show how the input
+    fields can be specified.
+
+.EXAMPLE
+    PS C:\> .\assign-pim-roles.ps1
+
+.NOTES
+    Author:       Thajudheen T A
+    Date:         October 2026
+    Version:      1.0.0
+    Changelog:
+        - 1.0.0: Initial release.
+.LINK
+    https://github.com
+#>
 
 function Show-Options {
     param (
@@ -20,12 +42,12 @@ if (!(Test-Path -Path $inputCsvFileName)) {
     Write-Output "Input CSV file not found. Generating CSV file with examples..."
 
     New-Item -Force -ItemType File $inputCsvFileName | Out-Null
-    Write-Output "# This CSV file provides the input data for the PIM role assignment script." >> $inputCsvFileName
+    Write-Output "# This CSV file provides the input data for the PIM role assignment script." > $inputCsvFileName
     Write-Output "# Fill in the data as per the examples provided below." >> $inputCsvFileName
     Write-Output "# Example 1: user-based active assignment" >> $inputCsvFileName
     Write-Output "# Example 2: group-based eligible time-bound assignment" >> $inputCsvFileName
     Write-Output "# Example 3: service-principal-based active assignment" >> $inputCsvFileName
-    Write-Output "principal,principalType,scope,role,assignmentType,ticketNumber,duration" > $inputCsvFileName
+    Write-Output "principal,principalType,scope,role,assignmentType,ticketNumber,duration" >> $inputCsvFileName
     Write-Output "user1,user,lab-network-identity,reader,active,TKT001" >> $inputCsvFileName
     Write-Output "test-group,group,lab-network,network contributor,eligible,TKT002,30" >> $inputCsvFileName
     Write-Output "test-sp,servicePrincipal,rg-lab-network,contributor,active,TKT002" >> $inputCsvFileName
@@ -39,6 +61,13 @@ Refreshing Azure PowerShell token...
 "
 
 Get-AzAccessToken 3>&1 | Out-Null
+
+if ($? -eq $false) {
+    Write-Error "Cannot obtain valid access token for Azure PowerShell."
+    Write-Error "Please review the previous error messages for the details."
+    Write-Error "Exiting."
+    exit 1
+}
 
 Write-Output "Processing input data from $inputCsvFileName"
 
@@ -114,8 +143,19 @@ Import-Csv $inputCsvFileName | ForEach-Object {
     } elseif ($principalType -eq 'servicePrincipal') {
         Write-Output "Performing a service principal search..."
 
-        $filterQuery = "startsWith(DisplayName, '" + $principal + "')"
+        Write-Output "Checking if the input is a GUID ..."
+        $outGuid = [guid]::Empty
+        $result = [guid]::TryParse($principal, [ref]$outGuid)
 
+        if ($result) {
+            Write-Output "Input value is a GUID."
+            $filterQuery = "(id eq '" + $principal + "') OR (appID eq '" + $principal + "')"
+        } else {
+            Write-Output "Input value is not a GUID."
+            $filterQuery = "startsWith(DisplayName, '" + $principal + "')"
+        }
+
+        Write-Output "Searching ..."
         $queryResults = Get-AzADServicePrincipal -Filter $filterQuery
 
         if ($queryResults.Length -eq 1) {
@@ -224,6 +264,7 @@ Import-Csv $inputCsvFileName | ForEach-Object {
     $roleDefinitionId = "/subscriptions/" + $subId + `
     "/providers/Microsoft.Authorization/roleDefinitions/" + $roleDefGUID
     Write-Output "Role Definition ID: $roleDefinitionId"
+    Write-Output ""
 
     # Part 4: Validation
 
@@ -246,81 +287,136 @@ Import-Csv $inputCsvFileName | ForEach-Object {
 
     # Part 5: Additional info
 
-    if (!$duration) {
-        $duration = 180 # default assignment duration of 6 months
-    }
-
+    
     $assignmentName = (New-Guid).ToString()
 
     $currentDate = Get-Date
     $startTimestamp = $currentDate.ToString("O") # assignment takes effect immediately
-    $endDate = $currentDate.AddDays($duration)
-    $endTimestamp = (Get-Date -Year $endDate.Year -Month $endDate.Month -Day $endDate.Day `
-    -Hour 1 -Minute 0 -Second 0 -Millisecond 0).ToString("O")
+
+    if ($duration) {
+        # duration value is specified
+        if($duration -eq 'permanent') {
+            # duration is specified as 'permanent'
+            $assignmentType = $assignmentType + $duration
+        } else {
+            # duration is specified as N number of days
+            $endDate = $currentDate.AddDays($duration)
+            $endTimestamp = (Get-Date -Year $endDate.Year -Month $endDate.Month -Day $endDate.Day `
+            -Hour 1 -Minute 0 -Second 0 -Millisecond 0).ToString("O")
+        }
+    } else {
+        # duration is not specified
+        $duration = 180 # default value of 180 days
+        $endDate = $currentDate.AddDays($duration)
+        $endTimestamp = (Get-Date -Year $endDate.Year -Month $endDate.Month -Day $endDate.Day `
+        -Hour 1 -Minute 0 -Second 0 -Millisecond 0).ToString("O")
+    }
 
     if ($assignmentType -eq 'active') {
+
         Write-Output "Creating active role assignment ..."
 
-        Write-Output "New-AzRoleAssignmentScheduleRequest `
+        New-AzRoleAssignmentScheduleRequest `
         -Name $assignmentName `
-        -Scope $scopeId
-        -ExpirationType AfterDateTime `
+        -Scope $scopeId `
+        -ExpirationType "AfterDateTime" `
         -ExpirationEndDateTime $endTimestamp `
         -ScheduleInfoStartDateTime $startTimestamp `
         -Justification $ticketNumber `
         -PrincipalId $principalId `
-        -RequestType AdminUpdate `
+        -RequestType "AdminUpdate" `
         -RoleDefinitionId $roleDefinitionId `
         -TicketSystem $ticketSystemName `
-        -TicketNumber $ticketNumber | Format-List"
+        -TicketNumber $ticketNumber | Format-List
 
-        # New-AzRoleAssignmentScheduleRequest `
-        # -Name $assignmentName `
-        # -Scope $scopeId
-        # -ExpirationType "AfterDateTime" `
-        # -ExpirationEndDateTime $endTimestamp `
-        # -ScheduleInfoStartDateTime $startTimestamp `
-        # -Justification $ticketNumber `
-        # -PrincipalId $principalId `
-        # -RequestType "AdminUpdate" `
-        # -RoleDefinitionId $roleDefinitionId `
-        # -TicketSystem $ticketSystemName `
-        # -TicketNumber $ticketNumber | Format-List
+        if ($? -eq $false) {
+            Write-Output ""
+            Write-Error "PIM cmdlet has failed to create the assignment."
+            Write-Error "Please review the previous error messages for the details."
+        }
 
     } elseif ($assignmentType -eq 'eligible') {
 
         Write-Output "Creating eligible role assignment ..."
 
-        Write-Output "New-AzRoleEligibilityScheduleRequest `
+        New-AzRoleEligibilityScheduleRequest `
         -Name $assignmentName `
-        -Scope $scopeId
-        -ExpirationType AfterDateTime `
+        -Scope $scopeId `
+        -ExpirationType "AfterDateTime" `
         -ExpirationEndDateTime $endTimestamp `
         -ScheduleInfoStartDateTime $startTimestamp `
         -PrincipalId $principalId `
-        -RequestType AdminUpdate `
+        -RequestType "AdminUpdate" `
         -RoleDefinitionId $roleDefinitionId `
         -TicketSystem $ticketSystemName `
-        -TicketNumber $ticketNumber | Format-List"
+        -TicketNumber $ticketNumber | Format-List
 
-        # New-AzRoleEligibilityScheduleRequest `
-        # -Name $assignmentName `
-        # -Scope $scopeId
-        # -ExpirationType "AfterDateTime" `
-        # -ExpirationEndDateTime $endTimestamp `
-        # -ScheduleInfoStartDateTime $startTimestamp `
-        # -PrincipalId $principalId `
-        # -RequestType "AdminUpdate" `
-        # -RoleDefinitionId $roleDefinitionId `
-        # -TicketSystem $ticketSystemName `
-        # -TicketNumber $ticketNumber | Format-List
+        if ($? -eq $false) {
+            Write-Output ""
+            Write-Error "PIM cmdlet has failed to create the assignment."
+            Write-Error "Please review the previous error messages for the details."
+        }
 
+    } elseif ($assignmentType -eq 'activePermanent') { 
+        
+        Write-Output "Creating active permanent role assignment ..."
+
+        New-AzRoleAssignmentScheduleRequest `
+        -Name $assignmentName `
+        -Scope $scopeId `
+        -ExpirationType "NoExpiration" `
+        -ScheduleInfoStartDateTime $startTimestamp `
+        -Justification $ticketNumber `
+        -PrincipalId $principalId `
+        -RequestType "AdminUpdate" `
+        -RoleDefinitionId $roleDefinitionId `
+        -TicketSystem $ticketSystemName `
+        -TicketNumber $ticketNumber | Format-List
+
+        if ($? -eq $false) {
+            Write-Output ""
+            Write-Warning "PIM cmdlet has failed; falling back to Azure RBAC cmdlet..."
+
+            New-AzRoleAssignment `
+            -ObjectId $principalId `
+            -RoleDefinitionId $roleDefGUID `
+            -Scope $scopeId `
+            -Description $ticketNumber | Format-List
+
+            if ($? -eq $false) {
+                Write-Output ""
+                Write-Error "Azure RBAC cmdlet has failed to create the assignment."
+                Write-Error "Please review the previous error messages for the details."
+            }
+        }
+
+    } elseif ($assignmentType -eq 'eligiblePermanent') { 
+        
+        Write-Output "Creating eligible permanent role assignment ..."
+
+        New-AzRoleEligibilityScheduleRequest `
+        -Name $assignmentName `
+        -Scope $scopeId `
+        -ExpirationType "NoExpiration" `
+        -ScheduleInfoStartDateTime $startTimestamp `
+        -PrincipalId $principalId `
+        -RequestType "AdminUpdate" `
+        -RoleDefinitionId $roleDefinitionId `
+        -TicketSystem $ticketSystemName `
+        -TicketNumber $ticketNumber | Format-List
+
+        if ($? -eq $false) {
+            Write-Output ""
+            Write-Error "PIM cmdlet has failed to create the assignment."
+            Write-Error "Please review the previous error messages for the details."
+        }
+        
     } else {
         Write-Error "Invalid role assignment type provided. Skipping assignment."
         return
     }
 
-    Read-Host "Wait"
+    Start-Sleep -Seconds 1
 
 }
 
